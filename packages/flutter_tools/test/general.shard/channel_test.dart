@@ -1,15 +1,15 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Flutter Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io' hide File;
 
 import 'package:args/command_runner.dart';
 import 'package:file/memory.dart';
 import 'package:flutter_tools/src/base/file_system.dart';
 import 'package:flutter_tools/src/cache.dart';
+import 'package:flutter_tools/src/globals.dart' as globals;
 import 'package:flutter_tools/src/commands/channel.dart';
 import 'package:flutter_tools/src/version.dart';
 import 'package:mockito/mockito.dart';
@@ -17,21 +17,7 @@ import 'package:process/process.dart';
 
 import '../src/common.dart';
 import '../src/context.dart';
-
-Process createMockProcess({ int exitCode = 0, String stdout = '', String stderr = '' }) {
-  final Stream<List<int>> stdoutStream = Stream<List<int>>.fromIterable(<List<int>>[
-    utf8.encode(stdout),
-  ]);
-  final Stream<List<int>> stderrStream = Stream<List<int>>.fromIterable(<List<int>>[
-    utf8.encode(stderr),
-  ]);
-  final Process process = MockProcess();
-
-  when(process.stdout).thenAnswer((_) => stdoutStream);
-  when(process.stderr).thenAnswer((_) => stderrStream);
-  when(process.exitCode).thenAnswer((_) => Future<int>.value(exitCode));
-  return process;
-}
+import '../src/mocks.dart';
 
 void main() {
   group('channel', () {
@@ -49,7 +35,10 @@ void main() {
       // The bots may return an empty list of channels (network hiccup?)
       // and when run locally the list of branches might be different
       // so we check for the header text rather than any specific channel name.
-      expect(testLogger.statusText, contains('Flutter channels:'));
+      expect(
+        testLogger.statusText,
+        containsIgnoringWhitespace('Flutter channels:'),
+      );
     }
 
     testUsingContext('list', () async {
@@ -58,6 +47,97 @@ void main() {
 
     testUsingContext('verbose list', () async {
       await simpleChannelTest(<String>['channel', '-v']);
+    });
+
+    testUsingContext('sorted by stability', () async {
+      final Process processAll = createMockProcess(
+          stdout: 'origin/beta\n'
+                  'origin/master\n'
+                  'origin/dev\n'
+                  'origin/stable\n');
+      final Process processWithExtra = createMockProcess(
+          stdout: 'origin/beta\n'
+                  'origin/master\n'
+                  'origin/dependabot/bundler\n'
+                  'origin/dev\n'
+                  'origin/v1.4.5-hotfixes\n'
+                  'origin/stable\n');
+      final Process processWithMissing = createMockProcess(
+          stdout: 'origin/beta\n'
+                  'origin/dependabot/bundler\n'
+                  'origin/v1.4.5-hotfixes\n'
+                  'origin/stable\n');
+
+      final ChannelCommand command = ChannelCommand();
+      final CommandRunner<void> runner = createTestCommandRunner(command);
+
+      when(mockProcessManager.start(
+        <String>['git', 'branch', '-r'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).thenAnswer((_) => Future<Process>.value(processAll));
+      await runner.run(<String>['channel']);
+      verify(mockProcessManager.start(
+        <String>['git', 'branch', '-r'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).called(1);
+      expect(testLogger.errorText, hasLength(0));
+      // format the status text for a simpler assertion.
+      final Iterable<String> rows = testLogger.statusText
+        .split('\n')
+        .map((String line) => line.substring(2)); // remove '* ' or '  ' from output
+      expect(rows, containsAllInOrder(FlutterVersion.officialChannels));
+
+      // clear buffer for next process
+      testLogger.clear();
+
+      when(mockProcessManager.start(
+        <String>['git', 'branch', '-r'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).thenAnswer((_) => Future<Process>.value(processWithExtra));
+      await runner.run(<String>['channel']);
+      verify(mockProcessManager.start(
+        <String>['git', 'branch', '-r'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).called(1);
+      expect(testLogger.errorText, hasLength(0));
+      // format the status text for a simpler assertion.
+      final Iterable<String> rows2 = testLogger.statusText
+        .split('\n')
+        .map((String line) => line.substring(2)); // remove '* ' or '  ' from output
+      expect(rows2, containsAllInOrder(FlutterVersion.officialChannels));
+
+      // clear buffer for next process
+      testLogger.clear();
+
+      when(mockProcessManager.start(
+        <String>['git', 'branch', '-r'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).thenAnswer((_) => Future<Process>.value(processWithMissing));
+      await runner.run(<String>['channel']);
+      verify(mockProcessManager.start(
+        <String>['git', 'branch', '-r'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).called(1);
+      expect(testLogger.errorText, hasLength(0));
+      // check if available official channels are in order of stability
+      int prev = -1;
+      int next = -1;
+      for (final String branch in FlutterVersion.officialChannels) {
+        next = testLogger.statusText.indexOf(branch);
+        if (next != -1) {
+          expect(prev < next, isTrue);
+          prev = next;
+        }
+      }
+
+    }, overrides: <Type, Generator>{
+      ProcessManager: () => mockProcessManager,
     });
 
     testUsingContext('removes duplicates', () async {
@@ -135,7 +215,10 @@ void main() {
         environment: anyNamed('environment'),
       )).called(1);
 
-      expect(testLogger.statusText, contains("Switching to flutter channel 'beta'..."));
+      expect(
+        testLogger.statusText,
+        containsIgnoringWhitespace("Switching to flutter channel 'beta'..."),
+      );
       expect(testLogger.errorText, hasLength(0));
 
       when(mockProcessManager.start(
@@ -172,8 +255,61 @@ void main() {
         environment: anyNamed('environment'),
       )).called(1);
     }, overrides: <Type, Generator>{
-      ProcessManager: () => mockProcessManager,
       FileSystem: () => MemoryFileSystem(),
+      ProcessManager: () => mockProcessManager,
+    });
+
+    testUsingContext('switching channels prompts to run flutter upgrade', () async {
+      when(mockProcessManager.start(
+        <String>['git', 'fetch'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).thenAnswer((_) => Future<Process>.value(createMockProcess()));
+      when(mockProcessManager.start(
+        <String>['git', 'show-ref', '--verify', '--quiet', 'refs/heads/beta'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).thenAnswer((_) => Future<Process>.value(createMockProcess()));
+      when(mockProcessManager.start(
+        <String>['git', 'checkout', 'beta', '--'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).thenAnswer((_) => Future<Process>.value(createMockProcess()));
+
+      final ChannelCommand command = ChannelCommand();
+      final CommandRunner<void> runner = createTestCommandRunner(command);
+      await runner.run(<String>['channel', 'beta']);
+
+      verify(mockProcessManager.start(
+        <String>['git', 'fetch'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).called(1);
+      verify(mockProcessManager.start(
+        <String>['git', 'show-ref', '--verify', '--quiet', 'refs/heads/beta'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).called(1);
+      verify(mockProcessManager.start(
+        <String>['git', 'checkout', 'beta', '--'],
+        workingDirectory: anyNamed('workingDirectory'),
+        environment: anyNamed('environment'),
+      )).called(1);
+
+      expect(
+        testLogger.statusText,
+        containsIgnoringWhitespace("Successfully switched to flutter channel 'beta'."),
+      );
+      expect(
+        testLogger.statusText,
+        containsIgnoringWhitespace(
+          "To ensure that you're on the latest build "
+          "from this channel, run 'flutter upgrade'"),
+      );
+      expect(testLogger.errorText, hasLength(0));
+    }, overrides: <Type, Generator>{
+      FileSystem: () => MemoryFileSystem(),
+      ProcessManager: () => mockProcessManager,
     });
 
     // This verifies that bug https://github.com/flutter/flutter/issues/21134
@@ -195,7 +331,7 @@ void main() {
         environment: anyNamed('environment'),
       )).thenAnswer((_) => Future<Process>.value(createMockProcess()));
 
-      final File versionCheckFile = Cache.instance.getStampFileFor(
+      final File versionCheckFile = globals.cache.getStampFileFor(
         VersionCheckStamp.flutterVersionCheckStampFile,
       );
 
@@ -233,8 +369,8 @@ void main() {
       expect(testLogger.errorText, hasLength(0));
       expect(versionCheckFile.existsSync(), isFalse);
     }, overrides: <Type, Generator>{
-      ProcessManager: () => mockProcessManager,
       FileSystem: () => MemoryFileSystem(),
+      ProcessManager: () => mockProcessManager,
     });
   });
 }

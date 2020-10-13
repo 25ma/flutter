@@ -1,8 +1,9 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Flutter Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../painting/mocks_for_image_cache.dart';
@@ -10,9 +11,16 @@ import '../widgets/semantics_tester.dart';
 
 Future<void> pumpWidgetWithBoilerplate(WidgetTester tester, Widget widget) async {
   await tester.pumpWidget(
-    Directionality(
-      textDirection: TextDirection.ltr,
-      child: widget,
+    Localizations(
+      locale: const Locale('en', 'US'),
+      delegates: const <LocalizationsDelegate<dynamic>>[
+        DefaultWidgetsLocalizations.delegate,
+        DefaultCupertinoLocalizations.delegate,
+      ],
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: widget,
+      ),
     ),
   );
 }
@@ -68,6 +76,94 @@ void main() {
     expect(actualActive.text.style.color, const Color(0xFF123456));
   });
 
+  testWidgets('Active and inactive colors dark mode', (WidgetTester tester) async {
+    const CupertinoDynamicColor dynamicActiveColor = CupertinoDynamicColor.withBrightness(
+      color: Color(0xFF000000),
+      darkColor: Color(0xFF000001),
+    );
+
+    const CupertinoDynamicColor dynamicInactiveColor = CupertinoDynamicColor.withBrightness(
+      color: Color(0xFF000002),
+      darkColor: Color(0xFF000003),
+    );
+
+    await pumpWidgetWithBoilerplate(tester, MediaQuery(
+      data: const MediaQueryData(),
+      child: CupertinoTabBar(
+        items: const <BottomNavigationBarItem>[
+          BottomNavigationBarItem(
+            icon: ImageIcon(TestImageProvider(24, 24)),
+            title: Text('Tab 1'),
+          ),
+          BottomNavigationBarItem(
+            icon: ImageIcon(TestImageProvider(24, 24)),
+            title: Text('Tab 2'),
+          ),
+        ],
+        currentIndex: 1,
+        activeColor: dynamicActiveColor,
+        inactiveColor: dynamicInactiveColor,
+      ),
+    ));
+
+    RichText actualInactive = tester.widget(find.descendant(
+      of: find.text('Tab 1'),
+      matching: find.byType(RichText),
+    ));
+    expect(actualInactive.text.style.color.value, 0xFF000002);
+
+    RichText actualActive = tester.widget(find.descendant(
+      of: find.text('Tab 2'),
+      matching: find.byType(RichText),
+    ));
+    expect(actualActive.text.style.color.value, 0xFF000000);
+
+    final RenderDecoratedBox renderDecoratedBox = tester.renderObject(find.descendant(
+      of: find.byType(BackdropFilter),
+      matching: find.byType(DecoratedBox),
+    ));
+
+    // Border color is resolved correctly.
+    final BoxDecoration decoration1 = renderDecoratedBox.decoration as BoxDecoration;
+    expect(decoration1.border.top.color.value, 0x4C000000);
+
+    // Switch to dark mode.
+    await pumpWidgetWithBoilerplate(tester, MediaQuery(
+        data: const MediaQueryData(platformBrightness: Brightness.dark),
+        child: CupertinoTabBar(
+          items: const <BottomNavigationBarItem>[
+            BottomNavigationBarItem(
+              icon: ImageIcon(TestImageProvider(24, 24)),
+              title: Text('Tab 1'),
+            ),
+            BottomNavigationBarItem(
+              icon: ImageIcon(TestImageProvider(24, 24)),
+              title: Text('Tab 2'),
+            ),
+          ],
+          currentIndex: 1,
+          activeColor: dynamicActiveColor,
+          inactiveColor: dynamicInactiveColor,
+        ),
+    ));
+
+    actualInactive = tester.widget(find.descendant(
+        of: find.text('Tab 1'),
+        matching: find.byType(RichText),
+    ));
+    expect(actualInactive.text.style.color.value, 0xFF000003);
+
+    actualActive = tester.widget(find.descendant(
+        of: find.text('Tab 2'),
+        matching: find.byType(RichText),
+    ));
+    expect(actualActive.text.style.color.value, 0xFF000001);
+
+    // Border color is resolved correctly.
+    final BoxDecoration decoration2 = renderDecoratedBox.decoration as BoxDecoration;
+    expect(decoration2.border.top.color.value, 0x29000000);
+  });
+
   testWidgets('Tabs respects themes', (WidgetTester tester) async {
     await tester.pumpWidget(
       CupertinoApp(
@@ -91,7 +187,7 @@ void main() {
       of: find.text('Tab 1'),
       matching: find.byType(RichText),
     ));
-    expect(actualInactive.text.style.color, CupertinoColors.inactiveGray);
+    expect(actualInactive.text.style.color.value, 0xFF999999);
 
     RichText actualActive = tester.widget(find.descendant(
       of: find.text('Tab 2'),
@@ -122,14 +218,14 @@ void main() {
       of: find.text('Tab 1'),
       matching: find.byType(RichText),
     ));
-    expect(actualInactive.text.style.color, CupertinoColors.inactiveGray);
+    expect(actualInactive.text.style.color.value, 0xFF757575);
 
     actualActive = tester.widget(find.descendant(
       of: find.text('Tab 2'),
       matching: find.byType(RichText),
     ));
-    expect(actualActive.text.style.color, CupertinoColors.activeOrange);
 
+    expect(actualActive.text.style.color, isSameColorAs(CupertinoColors.activeBlue.darkColor));
   });
 
   testWidgets('Use active icon', (WidgetTester tester) async {
@@ -289,14 +385,14 @@ void main() {
 
     expect(semantics, includesNodeWith(
       label: 'Tab 1',
-      hint: 'tab, 1 of 2',
+      hint: 'Tab 1 of 2',
       flags: <SemanticsFlag>[SemanticsFlag.isSelected],
       textDirection: TextDirection.ltr,
     ));
 
     expect(semantics, includesNodeWith(
       label: 'Tab 2',
-      hint: 'tab, 2 of 2',
+      hint: 'Tab 2 of 2',
       textDirection: TextDirection.ltr,
     ));
 
@@ -362,7 +458,7 @@ void main() {
         ));
 
     final DecoratedBox decoratedBox = tester.widget(find.byType(DecoratedBox));
-    final BoxDecoration boxDecoration = decoratedBox.decoration;
+    final BoxDecoration boxDecoration = decoratedBox.decoration as BoxDecoration;
     expect(boxDecoration.border, isNotNull);
 
     await pumpWidgetWithBoilerplate(
@@ -392,7 +488,7 @@ void main() {
     final DecoratedBox decoratedBoxHiddenBorder =
         tester.widget(find.byType(DecoratedBox));
     final BoxDecoration boxDecorationHiddenBorder =
-        decoratedBoxHiddenBorder.decoration;
+        decoratedBoxHiddenBorder.decoration as BoxDecoration;
     expect(boxDecorationHiddenBorder.border, isNull);
   });
 }
